@@ -136,10 +136,21 @@ impl KafkaProducer<'_> {
     }
 
     async fn encode_key(&self) -> anyhow::Result<Vec<u8>> {
-        if let Some(ref schema_registry) = self.schema_registry {
-            if self.key_schema.is_some() {
-                warn!("provided schema is ignored, since schema registry is used");
+        if let Some(schema) = &self.key_schema {
+            if self.schema_registry.is_some() {
+                warn!(
+                    "schema registry is ignored, since a schema file is provided and will be used"
+                );
             }
+            let mut writer = Writer::new(&schema, Vec::new());
+            let value: Value =
+                avro_value_from_file(&self.key_file, &schema).expect("Failed to read value file");
+            let value = ensure_is_record_if_required(value, &schema);
+            writer.append_value_ref(&value).unwrap();
+
+            let encoded = writer.into_inner().unwrap();
+            Ok(encoded)
+        } else if let Some(ref schema_registry) = self.schema_registry {
             encode_value_or_key(
                 &schema_registry.sr_settings,
                 &self.key_file,
@@ -148,14 +159,6 @@ impl KafkaProducer<'_> {
                 &schema_registry.avro_encoder,
             )
             .await
-        } else if let Some(schema) = &self.key_schema {
-            let mut writer = Writer::new(&schema, Vec::new());
-            let value =
-                avro_value_from_file(&self.key_file, &schema).expect("Failed to read value file");
-            writer.append_value_ref(&value).unwrap();
-
-            let encoded = writer.into_inner().unwrap();
-            Ok(encoded)
         } else {
             warn!("no schema used, we will use the key as is");
             let value =
@@ -164,10 +167,20 @@ impl KafkaProducer<'_> {
         }
     }
     async fn encode_payload(&self) -> anyhow::Result<Vec<u8>> {
-        if let Some(ref schema_registry) = self.schema_registry {
-            if self.value_schema.is_some() {
-                warn!("provided schema is ignored, since schema registry is used");
+        if let Some(schema) = &self.value_schema {
+            if self.schema_registry.is_some() {
+                warn!(
+                    "schema registry is ignored, since a schema file is provided and will be used"
+                );
             }
+            let mut writer = Writer::new(&schema, Vec::new());
+            let value =
+                avro_value_from_file(&self.value_file, &schema).expect("Failed to read value file");
+            writer.append_value_ref(&value).unwrap();
+
+            let encoded = writer.into_inner().unwrap();
+            Ok(encoded)
+        } else if let Some(ref schema_registry) = self.schema_registry {
             encode_value_or_key(
                 &schema_registry.sr_settings,
                 &self.value_file,
@@ -235,7 +248,7 @@ async fn encode_value_or_key(
         avro_value_from_file(&data_file, &value_schema).expect("Failed to read value file");
     info!("value: {:?}", value);
 
-    let value = match value {
+    let value: Vec<(&str, Value)> = match value {
         Value::Map(ref record) => {
             let map: Vec<(&str, Value)> = record
                 .iter()
@@ -278,9 +291,9 @@ fn avro_value_from_file(file: &PathBuf, schema: &Schema) -> anyhow::Result<Value
         // let reader = Cursor::new(file);
         let text = fs::read_to_string(file.clone()).unwrap();
         let value: serde_json::Value = serde_json::from_str::<serde_json::Value>(&text).unwrap();
-        println!("json value: {:?}", value);
+        info!("json value: {:?}", value);
         let value: Value = value.into();
-        println!("avro value: {:?}", value);
+        info!("avro value: {:?}", value);
         if !value.validate(&schema) {
             panic!(
                 "Invalid value! Json message {:?} is not a valid schema: {:?}",
@@ -295,120 +308,235 @@ fn avro_value_from_file(file: &PathBuf, schema: &Schema) -> anyhow::Result<Value
     Ok(map)
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use crate::async_impl::easy_avro::{EasyAvroDecoder, EasyAvroEncoder};
-//     use crate::async_impl::schema_registry::SrSettings;
-//     use crate::avro_common::get_supplied_schema;
-//     use crate::schema_registry_common::SubjectNameStrategy;
-//     use apache_avro::types::Value;
-//     use apache_avro::{from_value, Schema};
-//     use mockito::{mock, server_address};
-//     use test_utils::Heartbeat;
+fn ensure_is_record_if_required(value: Value, schema: &Schema) -> Value {
+    match value.clone() {
+        Value::Map(map) => {
+            match schema.clone() {
+                // Schema::Map(_) => {
+                //     Value::Map(map)
+                // },
+                Schema::Record { fields, .. } => {
+                    let values = fields
+                        .iter()
+                        .map(|field| {
+                            let value = map.get(&field.name).unwrap();
+                            (field.name.clone(), value.clone())
+                        })
+                        .collect();
+                    Value::Record(values)
+                }
+                _ => value,
+            }
+        }
+        any => any,
+    }
+}
 
-//     #[tokio::test]
-//     async fn test_decoder_default() {
-//         let _m = mock("GET", "/schemas/ids/1?deleted=true")
-//             .with_status(200)
-//             .with_header("content-type", "application/vnd.schemaregistry.v1+json")
-//             .with_body(r#"{"schema":"{\"type\":\"record\",\"name\":\"Heartbeat\",\"namespace\":\"nl.openweb.data\",\"fields\":[{\"name\":\"beat\",\"type\":\"long\"}]}"}"#)
-//             .create();
+#[cfg(test)]
+mod tests {
+    use apache_avro::schema::Schema;
+    use apache_avro::types::Record;
+    use apache_avro::*;
+    use serde::Deserialize;
+    use serde::Serialize;
+    use uuid::Uuid;
 
-//         let sr_settings = SrSettings::new(format!("http://{}", server_address()));
-//         let decoder = EasyAvroDecoder::new(sr_settings);
-//         let heartbeat = decoder
-//             .decode(Some(&[0, 0, 0, 0, 1, 6]))
-//             .await
-//             .unwrap()
-//             .value;
+    use crate::ensure_is_record_if_required;
 
-//         assert_eq!(
-//             heartbeat,
-//             Value::Record(vec![("beat".to_string(), Value::Long(3))])
-//         );
+    #[derive(Debug, Serialize, Deserialize)]
+    struct Key {
+        a: Uuid,
+        b: String,
+    }
 
-//         let item = match from_value::<Heartbeat>(&heartbeat) {
-//             Ok(h) => h,
-//             Err(_) => unreachable!(),
-//         };
-//         assert_eq!(item.beat, 3i64);
-//     }
+    #[test]
+    pub fn avro_sample_serde() {
+        // This test makes sure avro + serde works (which is not the case for version 0.13)
 
-//     #[tokio::test]
-//     async fn test_decode_with_schema_default() {
-//         let _m = mock("GET", "/schemas/ids/1?deleted=true")
-//             .with_status(200)
-//             .with_header("content-type", "application/vnd.schemaregistry.v1+json")
-//             .with_body(r#"{"schema":"{\"type\":\"record\",\"name\":\"Heartbeat\",\"namespace\":\"nl.openweb.data\",\"fields\":[{\"name\":\"beat\",\"type\":\"long\"}]}"}"#)
-//             .create();
+        let raw_schema = r#"
+            {
+                "type": "record",
+                "name": "Key",
+                "fields": [
+                    {"name": "a", "type": "string", "logicalType": "uuid"},
+                    {"name": "b", "type": "string"}
+                ]
+            }
+        "#;
 
-//         let sr_settings = SrSettings::new(format!("http://{}", server_address()));
-//         let decoder = EasyAvroDecoder::new(sr_settings);
-//         let heartbeat = decoder
-//             .decode_with_schema(Some(&[0, 0, 0, 0, 1, 6]))
-//             .await
-//             .unwrap()
-//             .unwrap()
-//             .value;
+        // if the schema is not valid, this function will return an error
+        let schema = Schema::parse_str(raw_schema).unwrap();
 
-//         assert_eq!(
-//             heartbeat,
-//             Value::Record(vec![("beat".to_string(), Value::Long(3))])
-//         );
+        // a writer needs a schema and something to write to
+        let mut writer = Writer::new(&schema, Vec::new());
 
-//         let item = match from_value::<Heartbeat>(&heartbeat) {
-//             Ok(h) => h,
-//             Err(_) => unreachable!(),
-//         };
-//         assert_eq!(item.beat, 3i64);
-//     }
+        // the structure models our Record schema
+        let test = Key {
+            a: Uuid::parse_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap(),
+            b: "foo".to_owned(),
+        };
+        // schema validation happens here
+        writer.append_ser(test).unwrap();
 
-//     #[tokio::test]
-//     async fn test_encode_value() {
-//         let _m = mock("GET", "/subjects/heartbeat-value/versions/latest")
-//             .with_status(200)
-//             .with_header("content-type", "application/vnd.schemaregistry.v1+json")
-//             .with_body(r#"{"subject":"heartbeat-value","version":1,"id":3,"schema":"{\"type\":\"record\",\"name\":\"Heartbeat\",\"namespace\":\"nl.openweb.data\",\"fields\":[{\"name\":\"beat\",\"type\":\"long\"}]}"}"#)
-//             .create();
+        let mut record = Record::new(writer.schema()).unwrap();
+        record.put("a", "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8");
+        record.put("b", "bar");
+        writer.append(record).unwrap();
 
-//         let sr_settings = SrSettings::new(format!("http://{}", server_address()));
-//         let encoder = EasyAvroEncoder::new(sr_settings);
+        let json: serde_json::Value =
+            serde_json::from_str(r#"{"a":"a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8","b":"foobar"}"#)
+                .unwrap();
+        use apache_avro::types::Value;
+        let value: Value = json.into();
 
-//         let value_strategy =
-//             SubjectNameStrategy::TopicNameStrategy(String::from("heartbeat"), false);
-//         let bytes = encoder
-//             .encode(vec![("beat", Value::Long(3))], value_strategy)
-//             .await
-//             .unwrap();
+        let value: Value = ensure_is_record_if_required(value, &schema);
+        writer.append_value_ref(&value).unwrap();
+        // this is how to get back the resulting avro bytecode
+        // this performs a flush operation to make sure data is written, so it can fail
+        // you can also call `writer.flush()` yourself without consuming the writer
+        let encoded = writer.into_inner().unwrap();
+        // println!("encoded: {:?}", encoded);
+        use apache_avro::from_value;
+        use apache_avro::Reader;
+        let reader = Reader::with_schema(&schema, &encoded[..]).unwrap();
 
-//         assert_eq!(bytes, vec![0, 0, 0, 0, 3, 6])
-//     }
+        let values: Vec<Key> = reader
+            .into_iter()
+            .map(|value| from_value::<Key>(&value.unwrap()).unwrap())
+            .collect();
 
-//     #[tokio::test]
-//     async fn test_primitive_schema() {
-//         let sr_settings = SrSettings::new(format!("http://{}", server_address()));
-//         let encoder = EasyAvroEncoder::new(sr_settings);
+        let v = values.get(0).unwrap();
+        assert_eq!(
+            v.a,
+            Uuid::parse_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap()
+        );
+        assert_eq!(v.b, "foo");
+        let v = values.get(1).unwrap();
+        assert_eq!(
+            v.a,
+            Uuid::parse_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap()
+        );
+        assert_eq!(v.b, "bar");
+        let v = values.get(2).unwrap();
+        assert_eq!(
+            v.a,
+            Uuid::parse_str("a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8").unwrap()
+        );
+        assert_eq!(v.b, "foobar");
+    }
 
-//         let _n = mock("POST", "/subjects/heartbeat-key/versions")
-//             .with_status(200)
-//             .with_header("content-type", "application/vnd.schemaregistry.v1+json")
-//             .with_body(r#"{"id":4}"#)
-//             .create();
+    //     use crate::async_impl::easy_avro::{EasyAvroDecoder, EasyAvroEncoder};
+    //     use crate::async_impl::schema_registry::SrSettings;
+    //     use crate::avro_common::get_supplied_schema;
+    //     use crate::schema_registry_common::SubjectNameStrategy;
+    //     use apache_avro::types::Value;
+    //     use apache_avro::{from_value, Schema};
+    //     use mockito::{mock, server_address};
+    //     use test_utils::Heartbeat;
 
-//         let primitive_schema_strategy = SubjectNameStrategy::TopicNameStrategyWithSchema(
-//             String::from("heartbeat"),
-//             true,
-//             get_supplied_schema(&Schema::String),
-//         );
-//         let bytes = encoder
-//             .encode_struct("key-value", &primitive_schema_strategy)
-//             .await;
+    //     #[tokio::test]
+    //     async fn test_decoder_default() {
+    //         let _m = mock("GET", "/schemas/ids/1?deleted=true")
+    //             .with_status(200)
+    //             .with_header("content-type", "application/vnd.schemaregistry.v1+json")
+    //             .with_body(r#"{"schema":"{\"type\":\"record\",\"name\":\"Heartbeat\",\"namespace\":\"nl.openweb.data\",\"fields\":[{\"name\":\"beat\",\"type\":\"long\"}]}"}"#)
+    //             .create();
 
-//         assert_eq!(
-//             bytes,
-//             Ok(vec![
-//                 0, 0, 0, 0, 4, 18, 107, 101, 121, 45, 118, 97, 108, 117, 101
-//             ])
-//         );
-//     }
-// }
+    //         let sr_settings = SrSettings::new(format!("http://{}", server_address()));
+    //         let decoder = EasyAvroDecoder::new(sr_settings);
+    //         let heartbeat = decoder
+    //             .decode(Some(&[0, 0, 0, 0, 1, 6]))
+    //             .await
+    //             .unwrap()
+    //             .value;
+
+    //         assert_eq!(
+    //             heartbeat,
+    //             Value::Record(vec![("beat".to_string(), Value::Long(3))])
+    //         );
+
+    //         let item = match from_value::<Heartbeat>(&heartbeat) {
+    //             Ok(h) => h,
+    //             Err(_) => unreachable!(),
+    //         };
+    //         assert_eq!(item.beat, 3i64);
+    //     }
+
+    //     #[tokio::test]
+    //     async fn test_decode_with_schema_default() {
+    //         let _m = mock("GET", "/schemas/ids/1?deleted=true")
+    //             .with_status(200)
+    //             .with_header("content-type", "application/vnd.schemaregistry.v1+json")
+    //             .with_body(r#"{"schema":"{\"type\":\"record\",\"name\":\"Heartbeat\",\"namespace\":\"nl.openweb.data\",\"fields\":[{\"name\":\"beat\",\"type\":\"long\"}]}"}"#)
+    //             .create();
+
+    //         let sr_settings = SrSettings::new(format!("http://{}", server_address()));
+    //         let decoder = EasyAvroDecoder::new(sr_settings);
+    //         let heartbeat = decoder
+    //             .decode_with_schema(Some(&[0, 0, 0, 0, 1, 6]))
+    //             .await
+    //             .unwrap()
+    //             .unwrap()
+    //             .value;
+
+    //         assert_eq!(
+    //             heartbeat,
+    //             Value::Record(vec![("beat".to_string(), Value::Long(3))])
+    //         );
+
+    //         let item = match from_value::<Heartbeat>(&heartbeat) {
+    //             Ok(h) => h,
+    //             Err(_) => unreachable!(),
+    //         };
+    //         assert_eq!(item.beat, 3i64);
+    //     }
+
+    //     #[tokio::test]
+    //     async fn test_encode_value() {
+    //         let _m = mock("GET", "/subjects/heartbeat-value/versions/latest")
+    //             .with_status(200)
+    //             .with_header("content-type", "application/vnd.schemaregistry.v1+json")
+    //             .with_body(r#"{"subject":"heartbeat-value","version":1,"id":3,"schema":"{\"type\":\"record\",\"name\":\"Heartbeat\",\"namespace\":\"nl.openweb.data\",\"fields\":[{\"name\":\"beat\",\"type\":\"long\"}]}"}"#)
+    //             .create();
+
+    //         let sr_settings = SrSettings::new(format!("http://{}", server_address()));
+    //         let encoder = EasyAvroEncoder::new(sr_settings);
+
+    //         let value_strategy =
+    //             SubjectNameStrategy::TopicNameStrategy(String::from("heartbeat"), false);
+    //         let bytes = encoder
+    //             .encode(vec![("beat", Value::Long(3))], value_strategy)
+    //             .await
+    //             .unwrap();
+
+    //         assert_eq!(bytes, vec![0, 0, 0, 0, 3, 6])
+    //     }
+
+    //     #[tokio::test]
+    //     async fn test_primitive_schema() {
+    //         let sr_settings = SrSettings::new(format!("http://{}", server_address()));
+    //         let encoder = EasyAvroEncoder::new(sr_settings);
+
+    //         let _n = mock("POST", "/subjects/heartbeat-key/versions")
+    //             .with_status(200)
+    //             .with_header("content-type", "application/vnd.schemaregistry.v1+json")
+    //             .with_body(r#"{"id":4}"#)
+    //             .create();
+
+    //         let primitive_schema_strategy = SubjectNameStrategy::TopicNameStrategyWithSchema(
+    //             String::from("heartbeat"),
+    //             true,
+    //             get_supplied_schema(&Schema::String),
+    //         );
+    //         let bytes = encoder
+    //             .encode_struct("key-value", &primitive_schema_strategy)
+    //             .await;
+
+    //         assert_eq!(
+    //             bytes,
+    //             Ok(vec![
+    //                 0, 0, 0, 0, 4, 18, 107, 101, 121, 45, 118, 97, 108, 117, 101
+    //             ])
+    //         );
+    //     }
+}

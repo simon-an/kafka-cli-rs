@@ -4,7 +4,7 @@ use apache_avro::Schema;
 use args::{SchemaUploadConfig, TestConfig};
 use clap::Parser;
 use env_logger::{Builder, Target};
-use kafka_config::KafkaConfig;
+use kafka_config::{consumer::ConsumerConfig, producer::ProducerConfig, KafkaConfig};
 use schema_registry::register_schema;
 use serde_json::Value;
 
@@ -94,14 +94,17 @@ async fn main() {
             }
         }
         args::Action::IntegrationTest(config) => {
+            log::info!("IntegrationTest: {:?}", config);
             let integration_test_config: TestConfig = config.into();
             test(integration_test_config, kafka_config).await;
         }
         args::Action::IntegrationTestFiles(config) => {
+            log::info!("IntegrationTestFiles: {:?}", config);
             let integration_test_config: TestConfig = config.into();
             test(integration_test_config, kafka_config).await;
         }
         args::Action::IntegrationTestFolder(config) => {
+            log::info!("IntegrationTestFolder: {:?}", config);
             let integration_test_config: TestConfig = config.into();
             test(integration_test_config, kafka_config).await;
         }
@@ -109,15 +112,21 @@ async fn main() {
 }
 
 async fn test(integration_test_config: TestConfig, kafka_config: KafkaConfig) {
-    let producer =
-        kafka_producer::KafkaProducer::new(&kafka_config, integration_test_config.producer.into());
-    let consumer =
-        kafka_consumer::KafkaConsumer::new(&kafka_config, integration_test_config.consumer.into());
+    let pc: ProducerConfig = integration_test_config.producer.into();
+    let cc: ConsumerConfig = integration_test_config.consumer.into();
+    let use_offset = cc.topic == pc.topic;
+    let producer = kafka_producer::KafkaProducer::new(&kafka_config, pc);
+    let consumer = kafka_consumer::KafkaConsumer::new(&kafka_config, cc);
     match producer.produce().await {
         Ok((partition, offset)) => {
             log::info!("Message produced at partiton {partition} and offset {offset}");
             tokio::time::sleep(Duration::from_millis(500)).await;
-            match consumer.consume(Some((partition, offset))).await {
+            let offset = if use_offset == true {
+                Some((partition, offset))
+            } else {
+                None
+            };
+            match consumer.consume(offset).await {
                 Ok(msg) => {
                     let expect = serde_json::from_slice::<Value>(
                         std::fs::read(integration_test_config.assertion_value_file)
