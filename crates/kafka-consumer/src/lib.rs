@@ -1,4 +1,4 @@
-use apache_avro::{from_value, Reader, Schema};
+use apache_avro::{Reader, Schema};
 use kafka_config::SchemaRegistryConfig;
 use log::{error, info};
 use opentelemetry::{
@@ -33,6 +33,7 @@ pub struct KafkaConsumer<'a> {
     topic: String,
     // key_file: Option<PathBuf>,
     consumer_group_id: String,
+    consumer_group_instance_id: Option<String>,
     // partition: Option<u32>,
     schema_registry: Option<SchemaRegistry<'a>>,
     key_schema: Option<Schema>,
@@ -49,6 +50,7 @@ impl KafkaConsumer<'_> {
             client: config.clone().into(),
             // key_file: key_file.clone(),
             consumer_group_id: consumer_config.consumer_group_id.clone(),
+            consumer_group_instance_id: consumer_config.consumer_group_instance_id.clone(),
             // partition: partition.clone(),
             value_schema: consumer_config
                 .value_schema_file
@@ -102,7 +104,12 @@ impl KafkaConsumer<'_> {
             .client
             .clone()
             .set("group.id", self.consumer_group_id.clone())
-            .set("group.instance.id", self.consumer_group_id.clone())
+            .set(
+                "group.instance.id",
+                self.consumer_group_instance_id
+                    .clone()
+                    .unwrap_or(uuid::Uuid::new_v4().to_string()),
+            )
             // .set("bootstrap.servers", brokers)
             .set("enable.partition.eof", "false")
             .set("session.timeout.ms", "6000")

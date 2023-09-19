@@ -16,7 +16,8 @@ schema_registry_converter = "3.1.0"                # depends on avro 0.14
 opentelemetry = "0.20"
 tracing = { version = "0.1", features = ["log"] }
 kafka-config = {path = "../crates/kafka-config"}
-rdkafka = {version = "0.34", features = ["ssl", "cmake-build"]}
+rdkafka = {version = "0.34", features = ["ssl"]}
+uuid = { version = "1", features = ["serde", "v4"] }
 # [patch.crates-io]
 # apache-avro = { version = "0.15" }
 

@@ -122,8 +122,11 @@ async fn test(integration_test_config: TestConfig, kafka_config: KafkaConfig) {
             log::info!("Message produced at partiton {partition} and offset {offset}");
             tokio::time::sleep(Duration::from_millis(500)).await;
             let offset = if use_offset == true {
+                log::info!("Using offset {offset} to comsume from topic");
                 Some((partition, offset))
             } else {
+                log::warn!("Getting the last message from topic, which might not be the one produced. The tests need to be smarter in the future.");
+                // this basicall means we need to store the offset, before producing the message and then reading and validating all messages afterwards.
                 None
             };
             match consumer.consume(offset).await {

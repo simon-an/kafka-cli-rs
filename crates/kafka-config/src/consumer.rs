@@ -8,4 +8,5 @@ pub struct ConsumerConfig {
     pub value_schema_file: Option<PathBuf>,
     pub key_schema_id: Option<u32>,
     pub value_schema_id: Option<u32>,
+    pub consumer_group_instance_id: Option<String>,
 }
