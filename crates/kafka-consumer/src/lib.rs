@@ -11,12 +11,11 @@ use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::stream_consumer::StreamConsumer;
 use rdkafka::consumer::*;
 use rdkafka::error::KafkaResult;
-use rdkafka::message::Message;
 use rdkafka::topic_partition_list::TopicPartitionList;
+use rdkafka::Message;
 use schema_registry::schema_from_file;
 use schema_registry_converter::async_impl::{avro::AvroDecoder, schema_registry::SrSettings};
 
-use core::panic;
 use std::time::Duration;
 
 pub struct SchemaRegistry<'a> {
@@ -29,7 +28,7 @@ pub struct SchemaRegistry<'a> {
 }
 
 pub struct KafkaConsumer<'a> {
-    client: ClientConfig,
+    // client: ClientConfig,
     topic: String,
     // key_file: Option<PathBuf>,
     consumer_group_id: String,
@@ -38,6 +37,7 @@ pub struct KafkaConsumer<'a> {
     schema_registry: Option<SchemaRegistry<'a>>,
     key_schema: Option<Schema>,
     value_schema: Option<Schema>,
+    consumer: LoggingConsumer,
 }
 
 impl KafkaConsumer<'_> {
@@ -45,9 +45,40 @@ impl KafkaConsumer<'_> {
         config: &kafka_config::KafkaConfig,
         consumer_config: kafka_config::consumer::ConsumerConfig,
     ) -> Self {
+        let client: ClientConfig = config.clone().into();
+        let context = CustomContext;
+        log::info!(
+            "consuming with group.id: {}",
+            consumer_config.consumer_group_id.clone()
+        );
+        let consumer: LoggingConsumer = client
+            .clone()
+            .set("group.id", consumer_config.consumer_group_id.clone())
+            .set(
+                "group.instance.id",
+                consumer_config
+                    .consumer_group_instance_id
+                    .clone()
+                    .clone()
+                    .unwrap_or(uuid::Uuid::new_v4().to_string()),
+            )
+            // .set("bootstrap.servers", brokers)
+            .set("enable.partition.eof", "false")
+            .set("session.timeout.ms", "6000")
+            .set("enable.auto.commit", "true") // TODO do we want to commit?
+            .set("enable.auto.offset.store", "true") // TODO do we want to commit?
+            // .set("delivery.timeout.ms", "1000") // THIS IS THE DEFAULT IN KafkaConfig
+            //.set("statistics.interval.ms", "30000")
+            // .set("auto.offset.reset", "latest")
+            // .set("auto.offset.reset", "earliest")
+            .set_log_level(RDKafkaLogLevel::Debug)
+            .create_with_context(context)
+            .expect("Consumer creation failed");
+
         Self {
+            consumer,
             topic: consumer_config.topic.clone(),
-            client: config.clone().into(),
+            // client: config.clone().into(),
             // key_file: key_file.clone(),
             consumer_group_id: consumer_config.consumer_group_id.clone(),
             consumer_group_instance_id: consumer_config.consumer_group_instance_id.clone(),
@@ -94,34 +125,15 @@ impl KafkaConsumer<'_> {
             }),
         }
     }
+    // pub async fn get_current_offset(&self) -> anyhow::Result<i64> {
+    //     let mut l = TopicPartitionList::new();
+    //     l.add_partition(&self.topic, 0);
+    //     let dur = Duration::from_secs(5);
+    //     let mut tpl = self.consumer.committed_offsets(l, dur).expect("getting offsets must work");
+
+    //     Ok(17171717i64)
+    // }
     pub async fn consume(&self, partition_offset: Option<(i32, i64)>) -> anyhow::Result<Vec<u8>> {
-        let context = CustomContext;
-        log::info!(
-            "consuming with group.id: {}",
-            self.consumer_group_id.clone()
-        );
-        let consumer: LoggingConsumer = self
-            .client
-            .clone()
-            .set("group.id", self.consumer_group_id.clone())
-            .set(
-                "group.instance.id",
-                self.consumer_group_instance_id
-                    .clone()
-                    .unwrap_or(uuid::Uuid::new_v4().to_string()),
-            )
-            // .set("bootstrap.servers", brokers)
-            .set("enable.partition.eof", "false")
-            .set("session.timeout.ms", "6000")
-            .set("enable.auto.commit", "false") // TODO do we want to commit?
-            .set("enable.auto.offset.store", "false") // TODO do we want to commit?
-            // .set("delivery.timeout.ms", "1000") // THIS IS THE DEFAULT IN KafkaConfig
-            //.set("statistics.interval.ms", "30000")
-            .set("auto.offset.reset", "latest")
-            // .set("auto.offset.reset", "earliest")
-            .set_log_level(RDKafkaLogLevel::Debug)
-            .create_with_context(context)
-            .expect("Consumer creation failed");
         let dur = Duration::from_secs(30);
         use tokio::time::timeout;
 
@@ -129,9 +141,9 @@ impl KafkaConsumer<'_> {
         l.add_partition(&self.topic, 0);
 
         if let Some((partition, offset)) = partition_offset {
-            consumer.assign(&l).expect("assign must work");
+            self.consumer.assign(&l).expect("assign must work");
             tokio::time::sleep(Duration::from_millis(1000)).await;
-            consumer
+            self.consumer
                 .seek(
                     self.topic.as_str(),
                     partition,
@@ -140,12 +152,13 @@ impl KafkaConsumer<'_> {
                 )
                 .expect("seek must work");
         } else {
-            consumer
-                .subscribe(&[self.topic.as_str()])
-                .expect("subscribe must work");
+            let _ = l
+                .set_partition_offset(&self.topic, 0, rdkafka::Offset::Stored)
+                .expect("set offset must work");
+            self.consumer.assign(&l).expect("assign must work");
         }
 
-        let future = timeout(dur, consumer.recv());
+        let future = timeout(dur, self.consumer.recv());
         match future.await.expect("timeout waiting for a result for 10s") {
             Err(e) => panic!("Kafka error: {}", e),
             Ok(message) => {
@@ -160,6 +173,13 @@ impl KafkaConsumer<'_> {
                 let mut span: global::BoxedSpan =
                     global::tracer("consumer").start_with_context("consume_payload", &context);
 
+                log::info!(
+                    "Recieved message at offset {} in partition {}, with key {:?}",
+                    message.offset(),
+                    message.partition(),
+                    message.key()
+                );
+                
                 let payload: serde_json::Value = if let Some(sr) = &self.schema_registry {
                     info!("Using avro encoder");
                     let value_result = match sr.avro_decoder.decode(message.payload()).await {

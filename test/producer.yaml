@@ -1,0 +1,4 @@
+topic: test2
+value_file: resources/msg.json
+key_file: resources/key.json
+schema: key.avro

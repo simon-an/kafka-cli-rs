@@ -11,12 +11,12 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 anyhow = { version = "1" }
-apache-avro = "0.14"
-schema_registry_converter = "3.1.0"                # depends on avro 0.14
+apache-avro = "0.16"
+schema_registry_converter = {git = "https://github.com/gklijs/schema_registry_converter", branch = "main"}               # depends on avro 0.14
 opentelemetry = "0.20"
 tracing = { version = "0.1", features = ["log"] }
 kafka-config = {path = "../crates/kafka-config"}
-rdkafka = {version = "0.34", features = ["ssl"]}
+rdkafka = {version = "0.34", features = ["ssl-vendored"]}
 uuid = { version = "1", features = ["serde", "v4"] }
 # [patch.crates-io]
 # apache-avro = { version = "0.15" }

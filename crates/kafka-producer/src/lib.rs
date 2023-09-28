@@ -315,8 +315,9 @@ fn ensure_is_record_if_required(value: Value, schema: &Schema) -> Value {
                 // Schema::Map(_) => {
                 //     Value::Map(map)
                 // },
-                Schema::Record { fields, .. } => {
+                Schema::Record(fields) => {
                     let values = fields
+                        .fields
                         .iter()
                         .map(|field| {
                             let value = map.get(&field.name).unwrap();
