@@ -54,6 +54,7 @@ impl KafkaConsumer<'_> {
         let consumer: LoggingConsumer = client
             .clone()
             .set("group.id", consumer_config.consumer_group_id.clone())
+            .set("client.id", consumer_config.consumer_group_id.clone())
             .set(
                 "group.instance.id",
                 consumer_config
@@ -162,7 +163,7 @@ impl KafkaConsumer<'_> {
 
         if let Some((partition, offset)) = partition_offset {
             self.consumer.assign(&l).expect("assign must work");
-            tokio::time::sleep(Duration::from_millis(1000)).await;
+            tokio::time::sleep(Duration::from_millis(10000)).await;
             self.consumer
                 .seek(
                     self.topic.as_str(),
@@ -175,10 +176,14 @@ impl KafkaConsumer<'_> {
             // let _ = l
             //     .set_partition_offset(&self.topic, 0, rdkafka::Offset::Stored)
             //     .expect("set offset must work");
+            info!("assign the consumer to consume from the stored offset");
+            let _ = l
+                .set_partition_offset(&self.topic, 0, rdkafka::Offset::Stored)
+                .expect("set offset must work");
             self.consumer.assign(&l).expect("assign must work");
-            self.consumer
-                .seek(&self.topic, 0, rdkafka::Offset::OffsetTail(0), dur)
-                .expect("seek must work");
+            // self.consumer
+            //     .seek(&self.topic, 0, rdkafka::Offset::OffsetTail(0), dur)
+            //     .expect("seek must work");
         }
 
         let future = timeout(dur, self.consumer.recv());

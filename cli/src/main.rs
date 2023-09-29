@@ -129,8 +129,8 @@ async fn test(integration_test_config: TestConfig, kafka_config: KafkaConfig) {
                 log::info!("Using offset {offset} to comsume from topic");
                 Some((partition, offset))
             } else {
-                log::info!("Using latest offset -1 before producing the new message");
-                Some((0, consumer_offset - 1))
+                log::info!("Using latest offset before producing the new message");
+                Some((0, consumer_offset))
             };
             match consumer.consume(offset).await {
                 Ok(msg) => {

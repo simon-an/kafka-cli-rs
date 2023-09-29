@@ -94,7 +94,7 @@ impl From<KafkaConfig> for ClientConfig {
             client_config.set("sasl.mechanisms", sasl.mechanisms);
             client_config.set("sasl.username", sasl.username);
             client_config.set("sasl.password", sasl.password);
-            client_config.set("delivery.timeout.ms", "1000");
+            client_config.set("delivery.timeout.ms", "2000");
         }
 
         client_config
