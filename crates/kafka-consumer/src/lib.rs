@@ -125,7 +125,7 @@ impl KafkaConsumer<'_> {
             }),
         }
     }
-    pub async fn get_current_offset(&self) -> anyhow::Result<i64> {
+    pub async fn get_commited_offset(&self) -> anyhow::Result<i64> {
         let mut l = TopicPartitionList::new();
         l.add_partition(&self.topic, 0);
         let dur = Duration::from_secs(30);
@@ -139,6 +139,19 @@ impl KafkaConsumer<'_> {
             .offset()
             .to_raw()
             .unwrap())
+    }
+    pub async fn get_current_offset(&self) -> anyhow::Result<i64> {
+        let mut l = TopicPartitionList::new();
+        l.add_partition(&self.topic, 0);
+        let dur = Duration::from_secs(30);
+        self.consumer.assign(&l).expect("assign must work");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let (earliest, latest) = self
+            .consumer
+            .fetch_watermarks(&self.topic, 0, dur)
+            .expect("seek must work");
+        info!("watermarks: {earliest} {latest}");
+        Ok(latest)
     }
     pub async fn consume(&self, partition_offset: Option<(i32, i64)>) -> anyhow::Result<Vec<u8>> {
         let dur = Duration::from_secs(30);
@@ -159,10 +172,13 @@ impl KafkaConsumer<'_> {
                 )
                 .expect("seek must work");
         } else {
-            let _ = l
-                .set_partition_offset(&self.topic, 0, rdkafka::Offset::Stored)
-                .expect("set offset must work");
+            // let _ = l
+            //     .set_partition_offset(&self.topic, 0, rdkafka::Offset::Stored)
+            //     .expect("set offset must work");
             self.consumer.assign(&l).expect("assign must work");
+            self.consumer
+                .seek(&self.topic, 0, rdkafka::Offset::OffsetTail(0), dur)
+                .expect("seek must work");
         }
 
         let future = timeout(dur, self.consumer.recv());

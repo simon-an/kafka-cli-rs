@@ -119,6 +119,8 @@ async fn test(integration_test_config: TestConfig, kafka_config: KafkaConfig) {
     let consumer = kafka_consumer::KafkaConsumer::new(&kafka_config, cc);
     let consumer_offset = consumer.get_current_offset().await.unwrap();
     log::info!("current offset before producing: {consumer_offset}");
+    let commited_offset = consumer.get_commited_offset().await.unwrap();
+    log::info!("commited offset before producing: {commited_offset}");
     match producer.produce().await {
         Ok((partition, offset)) => {
             log::info!("Message produced at partiton {partition} and offset {offset}");
@@ -127,8 +129,8 @@ async fn test(integration_test_config: TestConfig, kafka_config: KafkaConfig) {
                 log::info!("Using offset {offset} to comsume from topic");
                 Some((partition, offset))
             } else {
-                log::info!("using latest offset before producing the new message");
-                Some((0, consumer_offset))
+                log::info!("Using latest offset -1 before producing the new message");
+                Some((0, consumer_offset - 1))
             };
             match consumer.consume(offset).await {
                 Ok(msg) => {
