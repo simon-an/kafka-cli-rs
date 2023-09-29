@@ -117,8 +117,8 @@ async fn test(integration_test_config: TestConfig, kafka_config: KafkaConfig) {
     let use_offset = cc.topic == pc.topic;
     let producer = kafka_producer::KafkaProducer::new(&kafka_config, pc);
     let consumer = kafka_consumer::KafkaConsumer::new(&kafka_config, cc);
-    let offset = consumer.get_current_offset().await.unwrap();
-    log::info!("current offset before producing: {offset}");
+    let consumer_offset = consumer.get_current_offset().await.unwrap();
+    log::info!("current offset before producing: {consumer_offset}");
     match producer.produce().await {
         Ok((partition, offset)) => {
             log::info!("Message produced at partiton {partition} and offset {offset}");
@@ -128,7 +128,7 @@ async fn test(integration_test_config: TestConfig, kafka_config: KafkaConfig) {
                 Some((partition, offset))
             } else {
                 log::info!("using latest offset before producing the new message");
-                Some((0, offset))
+                Some((0, consumer_offset))
             };
             match consumer.consume(offset).await {
                 Ok(msg) => {
