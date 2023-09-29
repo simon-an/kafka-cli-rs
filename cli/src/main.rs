@@ -117,6 +117,8 @@ async fn test(integration_test_config: TestConfig, kafka_config: KafkaConfig) {
     let use_offset = cc.topic == pc.topic;
     let producer = kafka_producer::KafkaProducer::new(&kafka_config, pc);
     let consumer = kafka_consumer::KafkaConsumer::new(&kafka_config, cc);
+    let offset = consumer.get_current_offset().await.unwrap();
+    log::info!("current offset before producing: {offset}");
     match producer.produce().await {
         Ok((partition, offset)) => {
             log::info!("Message produced at partiton {partition} and offset {offset}");
@@ -125,9 +127,8 @@ async fn test(integration_test_config: TestConfig, kafka_config: KafkaConfig) {
                 log::info!("Using offset {offset} to comsume from topic");
                 Some((partition, offset))
             } else {
-                log::warn!("Getting the last message from topic, which might not be the one produced. The tests need to be smarter in the future.");
-                // this basicall means we need to store the offset, before producing the message and then reading and validating all messages afterwards.
-                None
+                log::info!("using latest offset before producing the new message");
+                Some((0, offset))
             };
             match consumer.consume(offset).await {
                 Ok(msg) => {

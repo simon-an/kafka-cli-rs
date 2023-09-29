@@ -69,7 +69,7 @@ impl KafkaConsumer<'_> {
             .set("enable.auto.offset.store", "true") // TODO do we want to commit?
             // .set("delivery.timeout.ms", "1000") // THIS IS THE DEFAULT IN KafkaConfig
             //.set("statistics.interval.ms", "30000")
-            // .set("auto.offset.reset", "latest")
+            .set("auto.offset.reset", "latest")
             // .set("auto.offset.reset", "earliest")
             .set_log_level(RDKafkaLogLevel::Debug)
             .create_with_context(context)
@@ -125,14 +125,21 @@ impl KafkaConsumer<'_> {
             }),
         }
     }
-    // pub async fn get_current_offset(&self) -> anyhow::Result<i64> {
-    //     let mut l = TopicPartitionList::new();
-    //     l.add_partition(&self.topic, 0);
-    //     let dur = Duration::from_secs(5);
-    //     let mut tpl = self.consumer.committed_offsets(l, dur).expect("getting offsets must work");
-
-    //     Ok(17171717i64)
-    // }
+    pub async fn get_current_offset(&self) -> anyhow::Result<i64> {
+        let mut l = TopicPartitionList::new();
+        l.add_partition(&self.topic, 0);
+        let dur = Duration::from_secs(30);
+        let tpl = self
+            .consumer
+            .committed_offsets(l, dur)
+            .expect("getting offsets must work");
+        Ok(tpl
+            .find_partition(&self.topic, 0)
+            .unwrap()
+            .offset()
+            .to_raw()
+            .unwrap())
+    }
     pub async fn consume(&self, partition_offset: Option<(i32, i64)>) -> anyhow::Result<Vec<u8>> {
         let dur = Duration::from_secs(30);
         use tokio::time::timeout;
@@ -179,7 +186,7 @@ impl KafkaConsumer<'_> {
                     message.partition(),
                     message.key()
                 );
-                
+
                 let payload: serde_json::Value = if let Some(sr) = &self.schema_registry {
                     info!("Using avro encoder");
                     let value_result = match sr.avro_decoder.decode(message.payload()).await {
