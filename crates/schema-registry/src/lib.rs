@@ -55,7 +55,7 @@ pub async fn register_schema(
     schema: Schema,
 ) -> Result<RegisteredSchema, SRCError> {
     let sr_settings = SrSettings::new(schema_registry_url);
-    let supplied_schema: SuppliedSchema = *get_supplied_schema(&schema);
+    let supplied_schema: SuppliedSchema = get_supplied_schema(&schema);
     post_schema(&sr_settings, subject, supplied_schema).await
 }
 
@@ -64,7 +64,7 @@ pub fn schema_from_file(path: PathBuf) -> Schema {
     let schema: Schema = Schema::parse_str(&schema).unwrap();
     schema
 }
-pub fn supplied_schema_from_file(path: PathBuf) -> Box<SuppliedSchema> {
+pub fn supplied_schema_from_file(path: PathBuf) -> SuppliedSchema {
     let schema = std::fs::read_to_string(path).expect("Should have been able to read the file");
     let schema: Schema = Schema::parse_str(&schema).unwrap();
     get_supplied_schema(&schema)

@@ -48,7 +48,11 @@ impl KafkaProducer<'_> {
 
         Self {
             topic: producer_config.topic.clone(),
-            producer: client.clone().set("client.id", "integration-tests").create().expect("Producer creation error"),
+            producer: client
+                .clone()
+                .set("client.id", "integration-tests")
+                .create()
+                .expect("Producer creation error"),
             // client,
             value_file: producer_config.value_file.clone(),
             key_file: producer_config.key_file.clone(),
