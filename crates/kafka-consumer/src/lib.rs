@@ -1,6 +1,6 @@
 use apache_avro::{Reader, Schema};
 use kafka_config::SchemaRegistryConfig;
-use log::{error, info};
+use log::{error, info, warn};
 use opentelemetry::{
     global,
     trace::{Span, Tracer},
@@ -31,11 +31,11 @@ pub struct KafkaConsumer<'a> {
     // client: ClientConfig,
     topic: String,
     // key_file: Option<PathBuf>,
-    consumer_group_id: String,
-    consumer_group_instance_id: Option<String>,
+    // consumer_group_id: String,
+    // consumer_group_instance_id: Option<String>,
     // partition: Option<u32>,
     schema_registry: Option<SchemaRegistry<'a>>,
-    key_schema: Option<Schema>,
+    // key_schema: Option<Schema>,
     value_schema: Option<Schema>,
     consumer: LoggingConsumer,
 }
@@ -81,17 +81,17 @@ impl KafkaConsumer<'_> {
             topic: consumer_config.topic.clone(),
             // client: config.clone().into(),
             // key_file: key_file.clone(),
-            consumer_group_id: consumer_config.consumer_group_id.clone(),
-            consumer_group_instance_id: consumer_config.consumer_group_instance_id.clone(),
+            // consumer_group_id: consumer_config.consumer_group_id.clone(),
+            // consumer_group_instance_id: consumer_config.consumer_group_instance_id.clone(),
             // partition: partition.clone(),
             value_schema: consumer_config
                 .value_schema_file
                 .clone()
                 .map(|path| schema_from_file(path)),
-            key_schema: consumer_config
-                .key_schema_file
-                .clone()
-                .map(|path| schema_from_file(path)),
+            // key_schema: consumer_config
+            //     .key_schema_file
+            //     .clone()
+            //     .map(|path| schema_from_file(path)),
             schema_registry: config.schema_registry.clone().map(|src| {
                 let SchemaRegistryConfig {
                     username,
@@ -130,16 +130,18 @@ impl KafkaConsumer<'_> {
         let mut l = TopicPartitionList::new();
         l.add_partition(&self.topic, 0);
         let dur = Duration::from_secs(30);
-        let tpl = self
-            .consumer
-            .committed_offsets(l, dur)
-            .expect("getting offsets must work");
+        let tpl = if let Ok(tpl) = self.consumer.committed_offsets(l, dur) {
+            tpl
+        } else {
+            warn!("No committed offsets found, returning 0");
+            return Ok(0);
+        };
         Ok(tpl
-            .find_partition(&self.topic, 0)
-            .unwrap()
+            .find_partition(&self.topic, 0) // TODO allow for multiple partitions
+            .expect("Partition 0 not found. Please reconfigure topic or tests.")
             .offset()
             .to_raw()
-            .unwrap())
+            .unwrap_or(0))
     }
     pub async fn get_current_offset(&self) -> anyhow::Result<i64> {
         let mut l = TopicPartitionList::new();
