@@ -14,7 +14,10 @@ use rdkafka::error::KafkaResult;
 use rdkafka::topic_partition_list::TopicPartitionList;
 use rdkafka::Message;
 use schema_registry::schema_from_file;
-use schema_registry_converter::async_impl::{avro::AvroDecoder, schema_registry::SrSettings};
+use schema_registry_converter::async_impl::{
+    avro::AvroDecoder,
+    schema_registry::{SrSettings, SrSettingsBuilder},
+};
 
 use std::time::Duration;
 
@@ -30,10 +33,11 @@ pub struct SchemaRegistry<'a> {
 pub struct KafkaConsumer<'a> {
     // client: ClientConfig,
     topic: String,
+    partition: Option<i32>,
+    offset: Option<i64>,
     // key_file: Option<PathBuf>,
     // consumer_group_id: String,
     // consumer_group_instance_id: Option<String>,
-    // partition: Option<u32>,
     schema_registry: Option<SchemaRegistry<'a>>,
     // key_schema: Option<Schema>,
     value_schema: Option<Schema>,
@@ -79,11 +83,12 @@ impl KafkaConsumer<'_> {
         Self {
             consumer,
             topic: consumer_config.topic.clone(),
+            offset: consumer_config.offset.clone(),
             // client: config.clone().into(),
             // key_file: key_file.clone(),
             // consumer_group_id: consumer_config.consumer_group_id.clone(),
             // consumer_group_instance_id: consumer_config.consumer_group_instance_id.clone(),
-            // partition: partition.clone(),
+            partition: consumer_config.partition.clone(),
             value_schema: consumer_config
                 .value_schema_file
                 .clone()
@@ -92,38 +97,35 @@ impl KafkaConsumer<'_> {
             //     .key_schema_file
             //     .clone()
             //     .map(|path| schema_from_file(path)),
-            schema_registry: config.schema_registry.clone().map(|src| {
-                let SchemaRegistryConfig {
-                    username,
-                    password,
-                    endpoint,
-                } = &src;
-                let sr_settings: SrSettings = SrSettings::new_builder(endpoint.to_string())
-                    .set_basic_authorization(username, Some(password))
-                    .build()
-                    .expect("Failed to build schema registry settings");
-                let avro_decoder = AvroDecoder::new(sr_settings.clone());
-                // let schema = std::fs::read_to_string("resources/msg.avro")
-                //     .expect("Should have been able to read the file");
-                // let schema: Schema = Schema::parse_str(&schema).unwrap();
-                // let subject_name_strategy =
-                //     SubjectNameStrategy::TopicNameStrategy(topic.clone(), false);
-                // upload schema!
-                // let subject_name_strategy = SubjectNameStrategy::TopicNameStrategyWithSchema(
-                //     topic.clone(),
-                //     true,
-                //     get_supplied_schema(&schema),
-                // );
+            schema_registry: config
+                .schema_registry
+                .clone()
+                .map(|src: SchemaRegistryConfig| {
+                    let sr_settings: SrSettings = SrSettingsBuilder::from(src)
+                        .build()
+                        .expect("Failed to build schema registry settings");
+                    let avro_decoder = AvroDecoder::new(sr_settings.clone());
+                    // let schema = std::fs::read_to_string("resources/msg.avro")
+                    //     .expect("Should have been able to read the file");
+                    // let schema: Schema = Schema::parse_str(&schema).unwrap();
+                    // let subject_name_strategy =
+                    //     SubjectNameStrategy::TopicNameStrategy(topic.clone(), false);
+                    // upload schema!
+                    // let subject_name_strategy = SubjectNameStrategy::TopicNameStrategyWithSchema(
+                    //     topic.clone(),
+                    //     true,
+                    //     get_supplied_schema(&schema),
+                    // );
 
-                SchemaRegistry {
-                    // url: endpoint.clone(),
-                    // schema,
-                    // sr_settings,
-                    // schema_id: id,
-                    // subject_name_strategy,
-                    avro_decoder,
-                }
-            }),
+                    SchemaRegistry {
+                        // url: endpoint.clone(),
+                        // schema,
+                        // sr_settings,
+                        // schema_id: id,
+                        // subject_name_strategy,
+                        avro_decoder,
+                    }
+                }),
         }
     }
     pub async fn get_commited_offset(&self) -> anyhow::Result<i64> {
@@ -160,10 +162,9 @@ impl KafkaConsumer<'_> {
         let dur = Duration::from_secs(30);
         use tokio::time::timeout;
 
-        let mut l = TopicPartitionList::new();
-        l.add_partition(&self.topic, 0);
-
         if let Some((partition, offset)) = partition_offset {
+            let mut l = TopicPartitionList::new();
+            l.add_partition(&self.topic, partition);
             self.consumer.assign(&l).expect("assign must work");
             tokio::time::sleep(Duration::from_millis(10000)).await;
             self.consumer
@@ -175,17 +176,27 @@ impl KafkaConsumer<'_> {
                 )
                 .expect("seek must work");
         } else {
-            // let _ = l
-            //     .set_partition_offset(&self.topic, 0, rdkafka::Offset::Stored)
-            //     .expect("set offset must work");
-            info!("assign the consumer to consume from the stored offset");
+            let mut l = TopicPartitionList::new();
+            if let Some(partition) = &self.partition {
+                l.add_partition(&self.topic, *partition);
+            } else {
+                l.add_partition(&self.topic, 0);
+            }
+            let offset = if let Some(offset) = &self.offset {
+                info!(
+                    "assign the consumer to consume from the offset provided from config: {offset}"
+                );
+                rdkafka::Offset::Offset(*offset)
+            } else {
+                info!("assign the consumer to consume from latest offset from high watermark");
+                let offset = self.get_current_offset().await.expect("Without any offset this will not work, because any other options (Beging, End, Stored) make no sense for tests");
+                rdkafka::Offset::Offset(offset)
+            };
             let _ = l
-                .set_partition_offset(&self.topic, 0, rdkafka::Offset::Stored)
+                .set_partition_offset(&self.topic, 0, offset)
                 .expect("set offset must work");
+            info!("set offset to {:?}", offset);
             self.consumer.assign(&l).expect("assign must work");
-            // self.consumer
-            //     .seek(&self.topic, 0, rdkafka::Offset::OffsetTail(0), dur)
-            //     .expect("seek must work");
         }
 
         let future = timeout(dur, self.consumer.recv());
@@ -255,7 +266,9 @@ impl KafkaConsumer<'_> {
 
 struct CustomContext;
 
-impl ClientContext for CustomContext {}
+impl ClientContext for CustomContext {
+    const ENABLE_REFRESH_OAUTH_TOKEN: bool = false;
+}
 
 impl ConsumerContext for CustomContext {
     fn pre_rebalance(&self, rebalance: &Rebalance) {

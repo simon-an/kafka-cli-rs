@@ -43,9 +43,7 @@ async fn main() {
                     kafka_config
                         .schema_registry
                         .clone()
-                        .expect("schema-registry-config must exist to upload schemas")
-                        .endpoint
-                        .to_string(),
+                        .expect("schema-registry-config must exist to upload schemas"),
                     format!("{}-key", subject),
                     schema,
                 )
@@ -59,9 +57,7 @@ async fn main() {
             let id = register_schema(
                 kafka_config
                     .schema_registry
-                    .expect("schema-registry-config must exist to upload schemas")
-                    .endpoint
-                    .to_string(),
+                    .expect("schema-registry-config must exist to upload schemas"),
                 format!("{}-value", subject),
                 value_schema,
             )

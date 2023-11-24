@@ -6,7 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-apache-avro = {workspace = true}
-schema_registry_converter = {workspace = true, features = ["avro", "json", "easy"]}
-rdkafka = { workspace = true}
-opentelemetry = {workspace = true}
+apache-avro = { workspace = true }
+schema_registry_converter = { workspace = true, features = [
+    "avro",
+    "json",
+    "easy",
+] }
+kafka-config = { path = "../kafka-config" }
+rdkafka = { workspace = true }
+opentelemetry = { workspace = true }
+reqwest = "0.11"

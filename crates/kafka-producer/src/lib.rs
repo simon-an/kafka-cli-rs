@@ -13,7 +13,7 @@ use rdkafka::ClientConfig;
 use schema_registry::schema_from_file;
 use schema_registry_converter::async_impl::avro::AvroEncoder;
 use schema_registry_converter::async_impl::schema_registry::{
-    get_schema_by_id, get_schema_by_subject, SrSettings,
+    get_schema_by_id, get_schema_by_subject, SrSettings, SrSettingsBuilder,
 };
 use schema_registry_converter::schema_registry_common::{SchemaType, SubjectNameStrategy};
 use std::fs;
@@ -66,8 +66,7 @@ impl KafkaProducer<'_> {
                 .map(|path| schema_from_file(path)),
 
             schema_registry: kafka_config.schema_registry.clone().map(|c| {
-                let sr_settings: SrSettings = SrSettings::new_builder(c.endpoint.to_string())
-                    .set_basic_authorization(&c.username, Some(&c.password))
+                let sr_settings: SrSettings = SrSettingsBuilder::from(c)
                     .build()
                     .expect("Failed to build schema registry settings");
                 let avro_encoder = AvroEncoder::new(sr_settings.clone());

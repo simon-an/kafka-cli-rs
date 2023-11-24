@@ -78,7 +78,7 @@ pub struct ClapOnlyTestConfig {
     pub consumer_group_instance_id: Option<String>,
 
     #[arg(short, long)]
-    pub consumer_partition: Option<u32>,
+    pub consumer_partition: Option<i32>,
     #[arg(short, long)]
     pub consumer_key_schema_file: Option<PathBuf>,
     #[arg(short, long)]
@@ -105,7 +105,9 @@ pub struct ConsumerConfig {
     #[arg(short, long)]
     pub consumer_group_instance_id: Option<String>,
     #[arg(short, long)]
-    pub partition: Option<u32>,
+    pub partition: Option<i32>,
+    #[arg(short, long)]
+    pub offset: Option<i64>,
     #[arg(short, long)]
     pub key_schema_id: Option<u32>,
     #[arg(short, long)]
@@ -153,6 +155,7 @@ impl From<ConsumerConfig> for kafka_config::consumer::ConsumerConfig {
             key_schema_id: config.key_schema_id,
             value_schema_id: config.value_schema_id,
             consumer_group_instance_id: config.consumer_group_instance_id,
+            offset: config.offset,
         }
     }
 }
@@ -214,6 +217,7 @@ impl From<ClapOnlyTestConfig> for TestConfig {
                 topic: value.consumer_topic,
                 consumer_group_id: value.consumer_group_id,
                 partition: value.consumer_partition,
+                offset: None,
                 key_schema_id: value.consumer_key_schema_id,
                 value_schema_id: value.consumer_value_schema_id,
                 key_schema_file: value.consumer_key_schema_file,

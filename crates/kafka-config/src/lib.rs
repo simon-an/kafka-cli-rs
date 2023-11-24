@@ -6,7 +6,9 @@ use serde::Serialize;
 use url::Url;
 
 pub mod consumer;
+mod into;
 pub mod producer;
+pub use into::*;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Sasl {
@@ -14,11 +16,29 @@ pub struct Sasl {
     pub password: String,
     pub mechanisms: String,
 }
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SchemaRegistryConfig {
+    #[serde(flatten)]
+    pub auth: SchemaRegistryAuth,
+    pub endpoint: Url,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(untagged)]
+pub enum SchemaRegistryAuth {
+    Basic(SchemaRegistryBasicAuth),
+    Bearer(SchemaRegistryBearerAuth),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SchemaRegistryBasicAuth {
     pub username: String,
     pub password: String,
-    pub endpoint: Url,
+}
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SchemaRegistryBearerAuth {
+    pub token: String,
 }
 
 impl Default for Sasl {
@@ -59,12 +79,34 @@ impl KafkaConfig {
     }
     pub fn from_env() -> anyhow::Result<KafkaConfig> {
         let mut builder = Config::builder();
+
         builder = builder.add_source(Config::try_from(&KafkaConfig::default())?);
         builder = builder
             .add_source(File::new(".kafka.config.yaml", config::FileFormat::Yaml).required(false));
         builder = builder
             .add_source(File::new(".kafka.config.json", config::FileFormat::Yaml).required(false));
+
+        let path_from_env = std::env::var("KAFKA_CONFIG_PATH");
+        builder = if let Ok(path_from_env) = path_from_env {
+            log::info!("Loading config from: {path_from_env}");
+            if path_from_env.ends_with("yaml") {
+                builder = builder
+                    .add_source(File::new(&path_from_env, config::FileFormat::Yaml).required(true));
+                builder
+            } else if path_from_env.ends_with("json") {
+                builder = builder
+                    .add_source(File::new(&path_from_env, config::FileFormat::Json).required(true));
+                builder
+            } else {
+                log::warn!("File type not supported. Ignore file: {path_from_env}");
+                builder
+            }
+        } else {
+            builder
+        };
+
         builder = builder.add_source(config::Environment::with_prefix("KAFKA").separator("_"));
+
         let kafka_config: KafkaConfig = builder.build()?.try_deserialize()?;
         Ok(kafka_config)
     }
@@ -101,35 +143,118 @@ impl From<KafkaConfig> for ClientConfig {
     }
 }
 
-#[test]
-fn test_create_kafka_config() {
-    std::env::set_var("KAFKA_ENDPOINT", "endpoint:9092");
-    std::env::set_var("KAFKA_SASL_USERNAME", "username");
-    std::env::set_var("KAFKA_SASL_PASSWORD", "password");
-    std::env::set_var("KAFKA_SCHEMAREGISTRY_ENDPOINT", "otherendpoint:8081");
-    std::env::set_var("KAFKA_SCHEMAREGISTRY_USERNAME", "username2");
-    std::env::set_var("KAFKA_SCHEMAREGISTRY_PASSWORD", "password2");
+#[cfg(test)]
+mod tests {
+    use crate::{
+        KafkaConfig, SchemaRegistryAuth, SchemaRegistryBasicAuth, SchemaRegistryBearerAuth,
+    };
+    use serial_test::serial;
+    use url::Url;
 
-    let cfg: KafkaConfig = KafkaConfig::from_env().unwrap();
-    let sasl = cfg.sasl.unwrap();
-    let username: String = sasl.username;
-    let password: String = sasl.password;
-    let endpoint: String = cfg.endpoint;
+    #[test]
+    #[serial]
+    fn test_create_kafka_config() {
+        std::env::set_var("KAFKA_ENDPOINT", "endpoint:9092");
+        std::env::set_var("KAFKA_SASL_USERNAME", "username");
+        std::env::set_var("KAFKA_SASL_PASSWORD", "password");
+        std::env::set_var("KAFKA_SCHEMAREGISTRY_ENDPOINT", "otherendpoint:8081");
+        std::env::set_var("KAFKA_SCHEMAREGISTRY_USERNAME", "username2");
+        std::env::set_var("KAFKA_SCHEMAREGISTRY_PASSWORD", "password2");
 
-    assert_eq!(username, "username");
-    assert_eq!(password, "password");
-    assert_eq!(endpoint, "endpoint:9092");
-    assert_eq!(
-        cfg.schema_registry.clone().unwrap().endpoint,
-        Url::parse("otherendpoint:8081").unwrap()
-    );
-    assert_eq!(cfg.schema_registry.clone().unwrap().password, "password2");
-    assert_eq!(cfg.schema_registry.clone().unwrap().username, "username2");
+        let cfg: KafkaConfig = KafkaConfig::from_env().unwrap();
+        let sasl = cfg.sasl.unwrap();
+        let username: String = sasl.username;
+        let password: String = sasl.password;
+        let endpoint: String = cfg.endpoint;
 
-    std::env::remove_var("KAFKA_ENDPOINT");
-    std::env::remove_var("KAFKA_SASL_USERNAME");
-    std::env::remove_var("KAFKA_SASL_PASSWORD");
-    std::env::remove_var("KAFKA_SCHEMAREGISTRY_ENDPOINT");
-    std::env::remove_var("KAFKA_SCHEMAREGISTRY_USERNAME");
-    std::env::remove_var("KAFKA_SCHEMAREGISTRY_PASSWORD");
+        assert_eq!(username, "username");
+        assert_eq!(password, "password");
+        assert_eq!(endpoint, "endpoint:9092");
+        assert_eq!(
+            cfg.schema_registry.clone().unwrap().endpoint,
+            Url::parse("otherendpoint:8081").unwrap()
+        );
+        if let SchemaRegistryAuth::Basic(auth) = cfg.schema_registry.clone().unwrap().auth {
+            assert_eq!(auth.username, "username2");
+            assert_eq!(auth.password, "password2");
+        } else {
+            panic!("Should have been basic auth");
+        }
+
+        std::env::remove_var("KAFKA_ENDPOINT");
+        std::env::remove_var("KAFKA_SASL_USERNAME");
+        std::env::remove_var("KAFKA_SASL_PASSWORD");
+        std::env::remove_var("KAFKA_SCHEMAREGISTRY_ENDPOINT");
+        std::env::remove_var("KAFKA_SCHEMAREGISTRY_USERNAME");
+        std::env::remove_var("KAFKA_SCHEMAREGISTRY_PASSWORD");
+    }
+
+    #[test]
+    #[serial]
+    fn test_create_kafka_config_with_token() {
+        std::env::set_var("KAFKA_ENDPOINT", "endpoint:9092");
+        std::env::set_var("KAFKA_SASL_USERNAME", "username"); // TODO: replace with token
+        std::env::set_var("KAFKA_SASL_PASSWORD", "password");
+        std::env::set_var("KAFKA_SCHEMAREGISTRY_ENDPOINT", "otherendpoint:8081");
+        std::env::set_var("KAFKA_SCHEMAREGISTRY_TOKEN", "token");
+
+        let cfg: KafkaConfig = KafkaConfig::from_env().unwrap();
+        let sasl = cfg.sasl.unwrap();
+        let username: String = sasl.username;
+        let password: String = sasl.password;
+        let endpoint: String = cfg.endpoint;
+
+        assert_eq!(username, "username");
+        assert_eq!(password, "password");
+        assert_eq!(endpoint, "endpoint:9092");
+        assert_eq!(
+            cfg.schema_registry.clone().unwrap().endpoint,
+            Url::parse("otherendpoint:8081").unwrap()
+        );
+        if let SchemaRegistryAuth::Bearer(auth) = cfg.schema_registry.clone().unwrap().auth {
+            assert_eq!(auth.token, "token");
+        } else {
+            panic!("Should have been Bearer auth");
+        }
+
+        std::env::remove_var("KAFKA_ENDPOINT");
+        std::env::remove_var("KAFKA_SASL_USERNAME");
+        std::env::remove_var("KAFKA_SASL_PASSWORD");
+        std::env::remove_var("KAFKA_SCHEMAREGISTRY_ENDPOINT");
+        std::env::remove_var("KAFKA_SCHEMAREGISTRY_TOKEN");
+    }
+
+    #[test]
+    #[serial]
+    fn test_topics_config_from_file_using_env_path() {
+        std::env::set_var("KAFKA_CONFIG_PATH", "resources/.kafka.example.yaml");
+        let cfg: KafkaConfig = KafkaConfig::from_env().unwrap();
+
+        assert_eq!(cfg.sasl.unwrap().username, "MyApiKey");
+        if let SchemaRegistryAuth::Basic(SchemaRegistryBasicAuth { username, .. }) =
+            cfg.schema_registry.unwrap().auth
+        {
+            assert_eq!(username, "MyApiKeyForSchemaRegistry");
+        } else {
+            panic!("Should have been SchemaRegistryBasicAuth auth");
+        }
+
+        std::env::remove_var("KAFKA_CONFIG_PATH");
+    }
+    #[test]
+    #[serial]
+    fn test_topics_config_from_file_using_env_path_with_token() {
+        std::env::set_var("KAFKA_CONFIG_PATH", "resources/.kafka.example.token.yaml");
+        let cfg: KafkaConfig = KafkaConfig::from_env().unwrap();
+
+        if let SchemaRegistryAuth::Bearer(SchemaRegistryBearerAuth { token }) =
+            cfg.schema_registry.unwrap().auth
+        {
+            assert_eq!(token, "MyToken");
+        } else {
+            panic!("Should have been Bearer auth");
+        }
+
+        std::env::remove_var("KAFKA_CONFIG_PATH");
+    }
 }

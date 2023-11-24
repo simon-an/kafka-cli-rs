@@ -1,0 +1,9 @@
+sasl:
+  username: MyApiKey
+  password: MyApiKeySecret
+  mechanisms: PLAIN
+securityprotocol: SASL_SSL
+endpoint: localhost:4567
+schemaregistry:
+  token: MyToken
+  endpoint: localhost:1234

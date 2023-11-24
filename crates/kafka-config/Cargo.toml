@@ -1,11 +1,15 @@
 [package]
-name = "kafka-config"
-version = "0.1.0"
 edition = "2021"
+name = "kafka-config"
+version = "0.2.0"
 
 [dependencies]
-config = { workspace = true }
-serde = { version = "1", features = ["derive"] }
-rdkafka = { workspace = true }
 anyhow = { workspace = true }
+config = { workspace = true }
+log = { workspace = true }
+rdkafka = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 url = { workspace = true }
+schema_registry_converter = { workspace = true, features = [] }
+[dev-dependencies]
+serial_test = "2"

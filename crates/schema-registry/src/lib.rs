@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
 use apache_avro::Schema;
+use kafka_config::SchemaRegistryConfig;
 use opentelemetry::propagation::{Extractor, Injector};
 use rdkafka::message::{BorrowedHeaders, Headers, OwnedHeaders};
+use reqwest::ClientBuilder;
 use schema_registry_converter::{
-    async_impl::schema_registry::{post_schema, SrSettings},
+    async_impl::schema_registry::{post_schema, SrSettingsBuilder},
     avro_common::get_supplied_schema,
     error::SRCError,
     schema_registry_common::{RegisteredSchema, SuppliedSchema},
@@ -50,11 +52,13 @@ impl<'a> Extractor for HeaderExtractor<'a> {
 }
 
 pub async fn register_schema(
-    schema_registry_url: String,
+    schema_registry: SchemaRegistryConfig,
     subject: String,
     schema: Schema,
 ) -> Result<RegisteredSchema, SRCError> {
-    let sr_settings = SrSettings::new(schema_registry_url);
+    let sr_settings = SrSettingsBuilder::from(schema_registry)
+        .build_with(ClientBuilder::default().connection_verbose(true))
+        .unwrap();
     let supplied_schema: SuppliedSchema = get_supplied_schema(&schema);
     post_schema(&sr_settings, subject, supplied_schema).await
 }

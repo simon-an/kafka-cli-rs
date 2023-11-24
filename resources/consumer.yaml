@@ -1,5 +1,5 @@
 topic: test
 value_file: resources/msg.json
 key_file: resources/key.json
-consumer_group_id: test
+consumer_group_id: test-2
 schema: key.avro
